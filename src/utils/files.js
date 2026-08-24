@@ -6,8 +6,8 @@ export function safeName(value, fallback = "asset") {
 
 export function extensionFor(url, contentType) {
   const extension = path.extname(url.pathname).toLowerCase();
-  if (extension && extension.length <= 8) return extension;
   const types = {
+    "text/html": ".html",
     "text/css": ".css",
     "text/javascript": ".js",
     "application/javascript": ".js",
@@ -17,10 +17,14 @@ export function extensionFor(url, contentType) {
     "image/jpeg": ".jpg",
     "image/webp": ".webp",
     "image/gif": ".gif",
+    "image/x-icon": ".ico",
     "font/woff": ".woff",
     "font/woff2": ".woff2",
+    "font/otf": ".otf",
   };
-  return types[contentType] || ".bin";
+  // Content type is authoritative for extensionless and incorrectly named
+  // resources, which are common in bundled frontend exports.
+  return types[contentType] || (extension && extension !== ".bin" && extension.length <= 8 ? extension : ".bin");
 }
 
 export function isTextAsset(asset) {
