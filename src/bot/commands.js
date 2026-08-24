@@ -77,7 +77,7 @@ export async function handleCommand(interaction) {
       embeds: [
         createEmbed(
           interaction,
-          "> fetched the page and discovered public assets...\n-# the zip file is attached below!",
+          "> fetched the page and discovered public assets... (the zip file is attached above!)",
         ),
       ],
       files: [new AttachmentBuilder(archivePath, { name: result.archiveName })],
