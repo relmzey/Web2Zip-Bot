@@ -10,8 +10,24 @@ import { createZip } from "./archive-builder.js";
 
 const MAX_PAGE_BYTES = 3 * 1024 * 1024;
 const MAX_ASSET_BYTES = 2 * 1024 * 1024;
-const MAX_ASSETS = 80;
-const MAX_ARCHIVE_BYTES = 7.5 * 1024 * 1024;
+const MAX_CONTENT_BYTES = 10 * 1024 * 1024;
+const MAX_ARCHIVE_BYTES = 10 * 1024 * 1024;
+
+function rewriteResolvedReferences(text, baseUrl, sourceLocalPath, assets) {
+  const replacements = new Map();
+  const sourceDirectory = path.posix.dirname(sourceLocalPath);
+
+  for (const reference of findReferences(text)) {
+    const resolved = resolvePublicUrl(reference, baseUrl);
+    const asset = resolved && assets.get(resolved.href);
+    if (!asset) continue;
+
+    const localPath = path.posix.relative(sourceDirectory, asset.localPath) || path.posix.basename(asset.localPath);
+    replacements.set(reference, localPath);
+  }
+
+  return rewriteReferences(text, replacements);
+}
 
 export async function cloneWebsite(input, onProgress = async () => {}) {
   const target = validateTarget(input);
@@ -23,13 +39,12 @@ export async function cloneWebsite(input, onProgress = async () => {}) {
     const page = await fetchResource(target, MAX_PAGE_BYTES);
     const html = page.body.toString("utf8");
     const title = html.match(/<title[^>]*>([\s\S]*?)<\/title>/i)?.[1]?.trim() || target.hostname;
-    const replacements = new Map();
     const assets = new Map();
     const queue = [];
     const seen = new Set();
+    let contentBytes = page.body.byteLength;
 
     const enqueue = (reference, base) => {
-      if (queue.length + assets.size >= MAX_ASSETS) return;
       const url = resolvePublicUrl(reference, base);
       if (!url || seen.has(url.href)) return;
       seen.add(url.href);
@@ -37,17 +52,18 @@ export async function cloneWebsite(input, onProgress = async () => {}) {
     };
 
     for (const reference of findReferences(html)) enqueue(reference, target);
-    while (queue.length && assets.size < MAX_ASSETS) {
+    while (queue.length) {
       const url = queue.shift();
       try {
         const downloaded = await fetchResource(url, MAX_ASSET_BYTES);
+        if (contentBytes + downloaded.body.byteLength > MAX_CONTENT_BYTES) continue;
         const hash = createHash("sha1").update(url.href).digest("hex").slice(0, 10);
         const baseName = safeName(path.basename(url.pathname) || "asset");
         const filename = `${hash}-${baseName}${path.extname(baseName) ? "" : extensionFor(url, downloaded.contentType)}`;
         const localPath = path.join("assets", filename);
         const asset = { url, contentType: downloaded.contentType, body: downloaded.body, localPath };
         assets.set(url.href, asset);
-        replacements.set(url.href, localPath);
+        contentBytes += downloaded.body.byteLength;
         if (isTextAsset(asset)) {
           for (const reference of findReferences(downloaded.body.toString("utf8"))) enqueue(reference, url);
         }
@@ -57,10 +73,20 @@ export async function cloneWebsite(input, onProgress = async () => {}) {
     }
 
     await onProgress(`Downloaded ${assets.size} public assets. Building the ZIP...`);
-    await writeFile(path.join(workDirectory, "index.html"), rewriteReferences(html, replacements));
+    await writeFile(
+      path.join(workDirectory, "index.html"),
+      rewriteResolvedReferences(html, target, "index.html", assets),
+    );
     for (const asset of assets.values()) {
       const body = isTextAsset(asset)
-        ? Buffer.from(rewriteReferences(asset.body.toString("utf8"), replacements))
+        ? Buffer.from(
+            rewriteResolvedReferences(
+              asset.body.toString("utf8"),
+              asset.url,
+              asset.localPath,
+              assets,
+            ),
+          )
         : asset.body;
       await writeFile(path.join(workDirectory, asset.localPath), body);
     }
