@@ -1,18 +1,31 @@
-const referencePatterns = [
-  /\b(?:src|href|poster|data-src|srcset)\s*=\s*["']([^"']+)["']/gi,
-  /url\(\s*["']?([^"')]+)["']?\s*\)/gi,
-];
+const resourceTagPattern = /<(?:link|script|img|source|video|audio|input)\b[^>]*>/gi;
+const attributePattern = /\b(?:src|href|poster|data-src|srcset)\s*=\s*["']([^"']+)["']/gi;
+const cssUrlPattern = /url\(\s*["']?([^"')]+)["']?\s*\)/gi;
 
-export function findReferences(text) {
+export function findReferences(text, type = "html") {
   const references = new Set();
-  for (const pattern of referencePatterns) {
-    for (const match of text.matchAll(pattern)) {
-      for (const candidate of (match[1] || "").split(",")) {
-        const reference = candidate.trim().split(/\s+/)[0];
-        if (reference && !reference.startsWith("#") && !reference.startsWith("data:")) {
-          references.add(reference);
-        }
+  const normalizedType = type.toLowerCase();
+  const addCandidates = (value) => {
+    for (const candidate of value.split(",")) {
+      const reference = candidate.trim().split(/\s+/)[0];
+      if (reference && !reference.startsWith("#") && !reference.startsWith("data:")) {
+        references.add(reference);
       }
+    }
+  };
+
+  if (normalizedType.includes("javascript") || normalizedType.includes("json")) {
+    return [];
+  }
+
+  const pattern = normalizedType.includes("css") ? cssUrlPattern : resourceTagPattern;
+  for (const match of text.matchAll(pattern)) {
+    if (type === "css") {
+      addCandidates(match[1] || "");
+      continue;
+    }
+    for (const attribute of (match[0] || "").matchAll(attributePattern)) {
+      addCandidates(attribute[1] || "");
     }
   }
   return [...references];
