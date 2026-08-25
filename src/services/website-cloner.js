@@ -12,12 +12,16 @@ const MAX_PAGE_BYTES = 3 * 1024 * 1024;
 const MAX_ASSET_BYTES = 2 * 1024 * 1024;
 const MAX_CONTENT_BYTES = 10 * 1024 * 1024;
 const MAX_ARCHIVE_BYTES = 10 * 1024 * 1024;
+const ASSET_CONCURRENCY = 6;
 
 function rewriteResolvedReferences(text, baseUrl, sourceLocalPath, assets) {
   const replacements = new Map();
   const sourceDirectory = path.posix.dirname(sourceLocalPath);
+  const type = sourceLocalPath === "index.html"
+    ? "html"
+    : assets.get(new URL(baseUrl).href)?.contentType || "";
 
-  for (const reference of findReferences(text)) {
+  for (const reference of findReferences(text, type)) {
     const resolved = resolvePublicUrl(reference, baseUrl);
     const asset = resolved && assets.get(resolved.href);
     if (!asset) continue;
@@ -42,6 +46,7 @@ export async function cloneWebsite(input, onProgress = async () => {}) {
     const assets = new Map();
     const queue = [];
     const seen = new Set();
+    const warnings = [];
     let contentBytes = page.body.byteLength;
 
     const enqueue = (reference, base) => {
@@ -51,26 +56,36 @@ export async function cloneWebsite(input, onProgress = async () => {}) {
       queue.push(url);
     };
 
-    for (const reference of findReferences(html)) enqueue(reference, target);
-    while (queue.length) {
-      const url = queue.shift();
-      try {
-        const downloaded = await fetchResource(url, MAX_ASSET_BYTES);
-        if (contentBytes + downloaded.body.byteLength > MAX_CONTENT_BYTES) continue;
-        const hash = createHash("sha1").update(url.href).digest("hex").slice(0, 10);
-        const baseName = safeName(path.basename(url.pathname) || "asset");
-        const filename = `${hash}-${baseName}${path.extname(baseName) ? "" : extensionFor(url, downloaded.contentType)}`;
-        const localPath = path.join("assets", filename);
-        const asset = { url, contentType: downloaded.contentType, body: downloaded.body, localPath };
-        assets.set(url.href, asset);
-        contentBytes += downloaded.body.byteLength;
-        if (isTextAsset(asset)) {
-          for (const reference of findReferences(downloaded.body.toString("utf8"))) enqueue(reference, url);
+    for (const reference of findReferences(html, "html")) enqueue(reference, target);
+    async function downloadWorker() {
+      while (queue.length) {
+        const url = queue.shift();
+        try {
+          const downloaded = await fetchResource(url, MAX_ASSET_BYTES);
+          if (contentBytes + downloaded.body.byteLength > MAX_CONTENT_BYTES) {
+            warnings.push({ url: url.href, reason: "total content limit reached" });
+            continue;
+          }
+          const hash = createHash("sha1").update(url.href).digest("hex").slice(0, 10);
+          const baseName = safeName(path.basename(url.pathname) || "asset");
+          const filename = `${hash}-${baseName}${path.extname(baseName) ? "" : extensionFor(url, downloaded.contentType)}`;
+          const localPath = path.join("assets", filename);
+          const asset = { url, contentType: downloaded.contentType, body: downloaded.body, localPath };
+          assets.set(url.href, asset);
+          contentBytes += downloaded.body.byteLength;
+          if (isTextAsset(asset)) {
+            for (const reference of findReferences(downloaded.body.toString("utf8"), downloaded.contentType)) {
+              enqueue(reference, url);
+            }
+          }
+        } catch (error) {
+          warnings.push({ url: url.href, reason: error.message });
         }
-      } catch {
-        // Optional resources such as analytics scripts should not fail the clone.
       }
     }
+    await Promise.all(
+      Array.from({ length: Math.min(ASSET_CONCURRENCY, queue.length) }, () => downloadWorker()),
+    );
 
     await onProgress(`Downloaded ${assets.size} public assets. Building the ZIP...`);
     await writeFile(
@@ -103,7 +118,7 @@ export async function cloneWebsite(input, onProgress = async () => {}) {
       await rm(archivePath, { force: true });
       throw new Error("The ZIP is larger than Discord's upload limit.");
     }
-    return { archivePath, archiveName, archiveSize, assetCount: assets.size, title };
+    return { archivePath, archiveName, archiveSize, assetCount: assets.size, title, warnings };
   } finally {
     await rm(workDirectory, { recursive: true, force: true });
   }
