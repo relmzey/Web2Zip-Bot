@@ -1,3 +1,5 @@
+import { isPrivateHostname } from "../utils/url.js";
+
 const TIMEOUT_MS = 15000;
 
 export async function fetchResource(url, maxBytes) {
@@ -12,6 +14,15 @@ export async function fetchResource(url, maxBytes) {
         accept: "text/html, text/css, application/javascript, image/*, font/*, */*",
       },
     });
+    const finalUrl = new URL(response.url);
+    if (
+      !["http:", "https:"].includes(finalUrl.protocol) ||
+      finalUrl.username ||
+      finalUrl.password ||
+      isPrivateHostname(finalUrl.hostname)
+    ) {
+      throw new Error("The website redirected to a private or unsupported URL.");
+    }
     if (!response.ok) throw new Error(`The website returned HTTP ${response.status}.`);
     const declaredSize = Number(response.headers.get("content-length") || 0);
     if (declaredSize > maxBytes) throw new Error("A page or asset is too large.");
