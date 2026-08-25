@@ -1,8 +1,8 @@
 {
-  "name": "web2zip-bot",
+  "name": "web2zip",
   "version": "1.0.0",
   "private": true,
-  "description": "A Discord bot that packages public website frontends into ZIP archives.",
+  "description": "A Program that packages public website frontends into ZIP archives.",
   "type": "module",
   "engines": {
     "node": ">=20"
